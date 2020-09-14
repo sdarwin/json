@@ -202,10 +202,13 @@ jobs:
         - git clone https://github.com/boostorg/boost-ci.git boost-ci-cloned
         - cp -prf boost-ci-cloned/ci .
         - rm -rf boost-ci-cloned
-        - source ci/travis/install.sh
+        - source ci/travis/install.sh 
       script:
         - cd $BOOST_ROOT/libs/$SELF
-        - $BOOST_ROOT/libs/$SELF/ci/travis/build.sh
+        - while sleep 5m; do echo "=====[ $SECONDS seconds check_  ]====="; done &
+        - travis_wait 60 $BOOST_ROOT/libs/$SELF/ci/travis/build.sh > travisoutput.txt 2>&1
+        - kill %1
+        - tail -n 15000 travisoutput.txt
 
     # Intel Parallel Studio XE
     # define INTEL_ICC_SERIAL_NUMBER and the following (under development):
