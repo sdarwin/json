@@ -1,0 +1,27 @@
+{
+  "name": "update-docs",
+  "version": "1.0.0",
+  "description": "Add new benchmarks into docs",
+  "main": "puppeteer1.js",
+  "scripts": {
+    "test": ""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/boostorg/json.git"
+  },
+  "keywords": [
+    "benchmarks",
+    "bench",
+    "docs"
+  ],
+  "author": "sdarwin",
+  "license": "BSL-1.0",
+  "bugs": {
+    "url": "https://github.com/boostorg/json/issues"
+  },
+  "homepage": "https://github.com/boostorg/json#readme",
+  "dependencies": {
+    "puppeteer": "^13.7.0"
+  }
+}
