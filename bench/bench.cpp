@@ -39,6 +39,8 @@
 #include <vector>
 
 #include "test_suite.hpp"
+#include "canada.hpp"
+#include "citm_catalog.hpp"
 
 /*  References
 
@@ -48,7 +50,7 @@
 */
 
 std::string s_tests = "ps";
-std::string s_impls = "busorn";
+std::string s_impls = "busodrn";
 std::size_t s_trials = 6;
 std::string s_branch = "";
 std::string s_alloc = "p";
@@ -747,6 +749,173 @@ public:
     }
 };
 
+class boost_direct_impl : public any_impl
+{
+private:
+    struct canada_support
+    {
+        using type = canada;
+        static constexpr char const* const name = "canada.json";
+    };
+    struct citm_catalog_support
+    {
+        using type = citm_catalog;
+        static constexpr char const* const name = "citm_catalog.json";
+    };
+    using supported_files = mp11::mp_list<
+        canada_support, citm_catalog_support>;
+
+    static
+    int
+    find_supported_file(file_item const& fi)
+    {
+        int result = -1;
+        using N = mp11::mp_size<supported_files>;
+        mp11::mp_for_each<mp11::mp_iota<N>>([&](auto index)
+        {
+            using supported_file = mp11::mp_at_c<supported_files, index.value>;
+            std::size_t const name_len = std::strlen(supported_file::name);
+
+            std::size_t pos = fi.name.rfind(
+                supported_file::name, string_view::npos, name_len);
+            if(pos == string_view::npos)
+                return;
+            if( pos + name_len != fi.name.size() )
+                return;
+            if( pos != 0 && fi.name[pos - 1] != '/'
+                && fi.name[pos - 1] != '\\' )
+            {
+                return;
+            }
+
+            result = static_cast<int>(index);
+        });
+        return result;
+    }
+
+public:
+    boost_direct_impl(bool with_file_io, parse_options const& popts)
+        : any_impl("boost (direct)", true, false, with_file_io, popts)
+    {}
+
+    clock_type::duration
+    parse_string(file_item const& fi, std::size_t repeat) const override
+    {
+        auto const i = find_supported_file(fi);
+        if( i < 0 )
+            return clock_type::duration::zero();
+
+        using N = mp11::mp_size<supported_files>;
+        return mp11::mp_with_index<N>(i, [&](auto index)
+        {
+            using supported_file = mp11::mp_at_c<supported_files, index.value>;
+
+            auto const start = clock_type::now();
+            while(repeat--)
+            {
+                using data_type = typename supported_file::type;
+                data_type v;
+                system::error_code ec;
+                parser_for<data_type> p(get_parse_options(), &v);
+
+                auto const n = p.write_some(
+                    false, fi.text.data(), fi.text.size(), ec );
+                if( !ec.failed() && n < fi.text.size() )
+                    ec = error::extra_data;
+                if( ec.failed() )
+                    throw system::system_error( ec );
+            }
+            return clock_type::now() - start;
+        });
+    }
+
+    clock_type::duration
+    parse_file(file_item const& fi, std::size_t repeat) const override
+    {
+        auto const i = find_supported_file(fi);
+        if( i < 0 )
+            return clock_type::duration::zero();
+
+        using N = mp11::mp_size<supported_files>;
+        return mp11::mp_with_index<N>(i, [&](auto index)
+        {
+            using supported_file = mp11::mp_at_c<supported_files, index.value>;
+
+            auto const start = clock_type::now();
+            char s[ BOOST_JSON_STACK_BUFFER_SIZE];
+            while(repeat--)
+            {
+                using data_type = typename supported_file::type;
+                data_type v;
+                system::error_code ec;
+                parser_for<data_type> p(get_parse_options(), &v);
+
+                FILE* f = fopen(fi.name.data(), "rb");
+
+                while( true )
+                {
+                    std::size_t const sz = fread(s, 1, sizeof(s), f);
+                    if( ferror(f) )
+                        break;
+
+                    p.write_some(true, s, sz, ec);
+                    if( ec.failed() )
+                        throw system::system_error(ec);
+
+                    if( feof(f) )
+                        break;
+                }
+
+                if( !p.done() )
+                {
+                    p.write_some(false, nullptr, 0, ec);
+                    if( ec.failed() )
+                        throw system::system_error(ec);
+                }
+
+                fclose(f);
+            }
+            return clock_type::now() - start;
+        });
+    }
+
+    clock_type::duration
+    serialize_string(file_item const& fi, std::size_t repeat) const override
+    {
+        auto const i = find_supported_file(fi);
+        if( i < 0 )
+            return clock_type::duration::zero();
+
+        using N = mp11::mp_size<supported_files>;
+        return mp11::mp_with_index<N>(i, [&](auto index)
+        {
+            using supported_file = mp11::mp_at_c<supported_files, index.value>;
+            typename supported_file::type v;
+            json::parse_into(v, fi.text);
+
+            auto const start = clock_type::now();
+            serializer sr;
+            string out;
+            out.reserve(512);
+            while(repeat--)
+            {
+                sr.reset(&v);
+                out.clear();
+                for(;;)
+                {
+                    auto const sv = sr.read(
+                        out.end(), out.capacity() - out.size() );
+                    out.grow( sv.size() );
+                    if( sr.done() )
+                        break;
+                    out.reserve( out.capacity() + 1 );
+                }
+            }
+            return clock_type::now() - start;
+        });
+    }
+};
+
 //----------------------------------------------------------
 
 #ifdef BOOST_JSON_HAS_RAPIDJSON
@@ -988,6 +1157,10 @@ bool add_impl(impl_list & vi, char kind, char alloc, char io, char num)
             is_pool, with_file_io, popts);
         break;
 
+    case 'd':
+        impl = std::make_unique<boost_direct_impl>(with_file_io, popts);
+        break;
+
 #ifdef BOOST_JSON_HAS_RAPIDJSON
     case 'r':
         if(is_pool)
@@ -1058,35 +1231,36 @@ main(
         std::cerr <<
             "Usage: bench [options...] <file>...\n"
             "\n"
-            "Options: -t:[p][s]             Test parsing, serialization or both\n"
-            "                                 (default both)\n"
-            "         -i:[b][u][s][o][r][n] Test the specified implementations\n"
-            "                                 (b: Boost.JSON)\n"
-            "                                 (u: Boost.JSON, null parser)\n"
-            "                                 (s: Boost.JSON, convenient functions)\n"
-            "                                 (o: Boost.JSON, stream operators)\n"
+            "Options: -t:[p][s]                Test parsing, serialization or both\n"
+            "            (default both)\n"
+            "         -i:[b][u][s][o][d][r][n] Test the specified implementations\n"
+            "            (b: Boost.JSON)\n"
+            "            (u: Boost.JSON, null parser)\n"
+            "            (s: Boost.JSON, convenient functions)\n"
+            "            (o: Boost.JSON, stream operators)\n"
+            "            (d: Boost.JSON, direct conversion)\n"
 #ifdef BOOST_JSON_HAS_RAPIDJSON
-            "                                 (r: RapidJSON)\n"
+            "            (r: RapidJSON)\n"
 #endif // BOOST_JSON_HAS_RAPIDJSON
 #ifdef BOOST_JSON_HAS_NLOHMANN_JSON
-            "                                 (n: nlohmann/json)\n"
+            "            (n: nlohmann/json)\n"
 #endif // BOOST_JSON_HAS_NLOHMANN_JSON
-            "                                 (default all)\n"
-            "         -a:(p|d)              Memory allocation strategy\n"
-            "                                 (p: memory pool)\n"
-            "                                 (d: default strategy)\n"
-            "                                 (default memory pool)\n"
-            "         -n:<number>           Number of trials (default 6)\n"
-            "         -b:<branch>           Branch label for boost implementations\n"
-            "         -m:(i|p|n)            Number parsing mode\n"
-            "                                 (i: imprecise)\n"
-            "                                 (p: precise)\n"
-            "                                 (n: none)\n"
-            "                                 (default imprecise)\n"
-            "         -f:(y|n)              Include file IO into consideration when testing parsers\n"
-            "                                 (y: yes)\n"
-            "                                 (n: no)\n"
-            "                                 (default no)\n"
+            "            (default all)\n"
+            "         -a:[p][d]                Memory allocation strategy\n"
+            "            (p: memory pool)\n"
+            "            (d: default strategy)\n"
+            "            (default memory pool)\n"
+            "         -n:<number>              Number of trials (default 6)\n"
+            "         -b:<branch>              Branch label for boost implementations\n"
+            "         -m:[i][p][n]             Number parsing mode\n"
+            "            (i: imprecise)\n"
+            "            (p: precise)\n"
+            "            (n: none)\n"
+            "            (default imprecise)\n"
+            "         -f:[y][n]                Include file IO into consideration when testing parsers\n"
+            "            (y: yes)\n"
+            "            (n: no)\n"
+            "            (default no)\n"
         ;
 
         return 4;
